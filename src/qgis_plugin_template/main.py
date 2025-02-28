@@ -149,6 +149,102 @@ class QgisPlugin:
             parent=self.iface.mainWindow(),
         )
 
+        # Handle debug mode and additional settings
+        debug_mode = int(setting(key="debug_mode", default=0))
+        if debug_mode:
+            debug_icon = QIcon(":/plugins/qgis_plugin_template/debug.svg")
+            self.debug_action = QAction(
+                debug_icon, "Debug Mode", self.iface.mainWindow()
+            )
+            self.debug_action.triggered.connect(self.debug)
+            self.iface.addToolBarIcon(self.debug_action)
+
+            tests_icon = QIcon(":/plugins/qgis_plugin_template/run-tests.svg")
+            self.tests_action = QAction(
+                tests_icon, "Run Tests", self.iface.mainWindow()
+            )
+            self.tests_action.triggered.connect(self.run_tests)
+            self.iface.addToolBarIcon(self.tests_action)
+        else:
+            self.tests_action = None
+            self.debug_action = None
+
+        debug_env = int(os.getenv("DEBUG", 0))
+        if debug_env:
+            self.debug()
+
+    def kill_debug(self):
+        # Note that even though this kills the debugpy process I still
+        # cannot successfully restart the debugger in vscode without restarting QGIS
+        if self.debug_running:
+            import psutil
+            import signal
+
+            """Find the PID of the process listening on the specified port."""
+            for conn in psutil.net_connections(kind="tcp"):
+                if conn.laddr.port == 9000 and conn.status == psutil.CONN_LISTEN:
+                    os.kill(conn.pid, signal.SIGTERM)
+
+    def debug(self):
+        """
+        Enters debug mode.
+        Shows a message to attach a debugger to the process.
+        """
+        self.kill_debug()
+        self.display_information_message_box(
+            title="qgis-plugin-template",
+            message="Close this dialog then open VSCode and start your debug client.",
+        )
+        import multiprocessing  # pylint: disable=import-outside-toplevel
+
+        if multiprocessing.current_process().pid > 1:
+            import debugpy  # pylint: disable=import-outside-toplevel
+
+            debugpy.listen(("0.0.0.0", 9000))
+            debugpy.wait_for_client()
+            self.display_information_message_bar(
+                title="qgis-plugin-template",
+                message="Visual Studio Code debugger is now attached on port 9000",
+            )
+            self.debug_action.setEnabled(False)  # prevent user starting it twice
+            self.debug_running = True
+
+    def run_tests(self):
+        """Run unit tests in the python console."""
+
+        main_window = self.iface.mainWindow()
+        action = main_window.findChild(QAction, "mActionShowPythonDialog")
+        action.trigger()
+        for child in main_window.findChildren(QDockWidget, "PythonConsole"):
+            if child.objectName() == "PythonConsole":
+                child.show()
+                for widget in child.children():
+
+                    widget_class_name = widget.__class__.__name__
+                    if widget_class_name == "PythonConsole":
+                        shell = widget.console.shell
+                        test_dir = "/home/user/dev/python/qgis-plugin-template/test"
+                        shell.runCommand("")
+                        shell.runCommand("import unittest")
+                        shell.runCommand("test_loader = unittest.TestLoader()")
+                        shell.runCommand(
+                            f'test_suite = test_loader.discover(start_dir="{test_dir}", pattern="test_*.py")'
+                        )
+                        shell.runCommand(
+                            "test_runner = unittest.TextTestRunner(verbosity=2)"
+                        )
+                        shell.runCommand("test_runner.run(test_suite)")
+                        # Unload test modules
+                        shell.runCommand(
+                            f"""
+    for module_name in list(sys.modules.keys()):
+        if module_name.startswith("test_") or module_name.startswith("utilities_for_testing"):
+            del sys.modules[module_name]
+
+                                """
+                        )
+                        break
+
     def onClosePlugin(self):
         """Cleanup necessary items here when plugin widget is closed"""
         self.pluginIsActive = False
